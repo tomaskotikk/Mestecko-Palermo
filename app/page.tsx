@@ -655,6 +655,19 @@ export default function Home() {
 
         {view === 'playing' && (
           <div className="max-w-2xl mx-auto text-center">
+            {/* Kategorie - viditelná pro všechny */}
+            {(gameState.category || gameState.customWords) && (
+              <div className="mb-6 bg-zinc-800/50 border border-zinc-700 rounded-xl p-4">
+                <p className="text-xs text-zinc-500 uppercase tracking-wider mb-1">Kategorie</p>
+                <p className="text-lg font-bold text-purple-400">
+                  {gameState.category 
+                    ? categories.find(c => c.id === gameState.category)?.name || '🎯 Kategorie'
+                    : '✏️ Vlastní slova'
+                  }
+                </p>
+              </div>
+            )}
+
             <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-6 sm:p-12">
               {currentPlayer?.isImpostor ? (
                 <div className="space-y-4 sm:space-y-6">
@@ -665,7 +678,7 @@ export default function Home() {
                   </div>
                   <div>
                     <h3 className="text-2xl sm:text-3xl font-bold text-red-400 mb-2 sm:mb-3">TY JSI IMPOSTOR! 🎭</h3>
-                    <p className="text-sm sm:text-base text-zinc-400">Snaž se zjistit slovo, aniž bys to prozradil 🕵️‍♂️</p>
+                    <p className="text-sm sm:text-base text-zinc-400">Snaž se zjistit slovo z kategorie výše, aniž bys to prozradil 🕵️‍♂️</p>
                   </div>
                   {currentPlayer.speakingOrder && (
                     <div className="bg-zinc-800 border border-zinc-700 rounded-xl p-4">
