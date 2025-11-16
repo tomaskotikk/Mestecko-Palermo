@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getRoom, getRandomWord } from '@/lib/game-state';
 import { pusherServer } from '@/lib/pusher';
 
+export const dynamic = 'force-dynamic';
+
 export async function POST(request: NextRequest) {
   try {
     const { roomCode, category, customWords, playerId } = await request.json();

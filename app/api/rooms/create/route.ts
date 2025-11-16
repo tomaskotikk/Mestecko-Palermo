@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createRoom, getRoom } from '@/lib/game-state';
 import { pusherServer } from '@/lib/pusher';
 
+export const dynamic = 'force-dynamic';
+
 export async function POST(request: NextRequest) {
   try {
     const { name, maxPlayers } = await request.json();

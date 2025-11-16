@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { pusherServer } from '@/lib/pusher';
 
+export const dynamic = 'force-dynamic';
+
 export async function POST(request: NextRequest) {
   try {
     const { socket_id, channel_name } = await request.json();
