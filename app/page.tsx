@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { io, Socket } from 'socket.io-client';
+import Pusher from 'pusher-js';
 
 interface Player {
   id: string;
@@ -38,7 +38,8 @@ const categories = [
 ];
 
 export default function Home() {
-  const [socket, setSocket] = useState<Socket | null>(null);
+  const [pusher, setPusher] = useState<Pusher | null>(null);
+  const [channel, setChannel] = useState<any>(null);
   const [playerName, setPlayerName] = useState('');
   const [roomCode, setRoomCode] = useState('');
   const [inputRoomCode, setInputRoomCode] = useState('');
@@ -59,91 +60,154 @@ export default function Home() {
   const [copied, setCopied] = useState(false);
   const [maxPlayers, setMaxPlayers] = useState<number>(5);
 
+  // Initialize Pusher
   useEffect(() => {
-    const socketUrl = process.env.NEXT_PUBLIC_SOCKET_URL || (typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3001');
-    const newSocket = io(socketUrl);
-    setSocket(newSocket);
-
-    newSocket.on('connect', () => {
-      if (newSocket.id) {
-        setPlayerId(newSocket.id);
-      }
-    });
-
-    newSocket.on('gameState', (state: GameState) => {
-      console.log('📦 Received gameState:', state);
-      console.log('👥 maxPlayers:', state.maxPlayers);
-      console.log('👥 players count:', state.players.length);
-      setGameState(state);
-      if (state.roomCode) {
-        setRoomCode(state.roomCode);
-      }
-      if (state.gamePhase === 'lobby') {
-        setView('lobby');
-        // Reset votedFor když se vrátíme do lobby (nová hra)
-        setVotedFor(null);
-        setShowWord(false);
-      } else if (state.gamePhase === 'playing') {
-        setView('playing');
-      } else if (state.gamePhase === 'voting') {
-        setView('voting');
-        // Reset votedFor při začátku nového hlasování
-        setVotedFor(null);
-      } else if (state.gamePhase === 'results') {
-        setView('results');
-      }
-      
-      const currentPlayer = state.players.find(p => p.id === newSocket.id);
-      if (state.gamePhase === 'playing' && currentPlayer && !currentPlayer.isImpostor && currentPlayer.word) {
-        setShowWord(true);
-      } else if (state.gamePhase === 'lobby') {
-        setShowWord(false);
-      }
-    });
-
-    newSocket.on('wordAssigned', (data: { word: string; isImpostor: boolean }) => {
-      if (!data.isImpostor && data.word) {
-        setShowWord(true);
-      }
-    });
-
-    newSocket.on('error', (data: { message: string }) => {
-      setError(data.message);
-      setTimeout(() => setError(''), 5000);
-    });
-
-    return () => {
-      newSocket.close();
-    };
+    if (typeof window !== 'undefined' && process.env.NEXT_PUBLIC_PUSHER_KEY) {
+      const pusherInstance = new Pusher(process.env.NEXT_PUBLIC_PUSHER_KEY!, {
+        cluster: process.env.NEXT_PUBLIC_PUSHER_CLUSTER || 'eu',
+        authEndpoint: '/api/pusher/auth',
+        auth: {
+          headers: {
+            'Content-Type': 'application/json',
+          },
+        },
+      });
+      setPusher(pusherInstance);
+      return () => {
+        pusherInstance.disconnect();
+      };
+    }
   }, []);
 
-  const createRoom = () => {
-    if (socket && playerName.trim() && maxPlayers) {
-      setError('');
-      socket.emit('createRoom', { name: playerName.trim(), maxPlayers }, (response: { roomCode?: string; error?: string }) => {
-        if (response.error) {
-          setError(response.error);
-        } else if (response.roomCode) {
-          setRoomCode(response.roomCode);
+  // Subscribe to room channel when roomCode changes
+  useEffect(() => {
+    if (pusher && roomCode) {
+      const roomChannel = pusher.subscribe(`room-${roomCode}`);
+      const privateChannel = playerId ? pusher.subscribe(`private-player-${playerId}`) : null;
+
+      // Čekej na připojení channelu a načti aktuální stav
+      roomChannel.bind('pusher:subscription_succeeded', async () => {
+        console.log('✅ Subscribed to room channel:', roomCode);
+        // Načti aktuální stav místnosti
+        try {
+          const response = await fetch(`/api/rooms/state?roomCode=${roomCode}`);
+          if (response.ok) {
+            const state = await response.json();
+            setGameState(state);
+            if (state.gamePhase === 'lobby') {
+              setView('lobby');
+            }
+          }
+        } catch (err) {
+          console.error('Error fetching room state:', err);
         }
       });
+
+      roomChannel.bind('gameState', (state: GameState) => {
+        console.log('📦 Received gameState:', state);
+        setGameState(state);
+        if (state.roomCode) {
+          setRoomCode(state.roomCode);
+        }
+        if (state.gamePhase === 'lobby') {
+          setView('lobby');
+          setVotedFor(null);
+          setShowWord(false);
+        } else if (state.gamePhase === 'playing') {
+          setView('playing');
+        } else if (state.gamePhase === 'voting') {
+          setView('voting');
+          setVotedFor(null);
+        } else if (state.gamePhase === 'results') {
+          setView('results');
+        }
+        
+        const currentPlayer = state.players.find(p => p.id === playerId);
+        if (state.gamePhase === 'playing' && currentPlayer && !currentPlayer.isImpostor && currentPlayer.word) {
+          setShowWord(true);
+        } else if (state.gamePhase === 'lobby') {
+          setShowWord(false);
+        }
+      });
+
+      if (privateChannel) {
+        privateChannel.bind('pusher:subscription_succeeded', () => {
+          console.log('✅ Subscribed to private channel:', playerId);
+        });
+
+        privateChannel.bind('wordAssigned', (data: { word: string; isImpostor: boolean }) => {
+          if (!data.isImpostor && data.word) {
+            setShowWord(true);
+          }
+        });
+      }
+
+      setChannel(roomChannel);
+
+      return () => {
+        roomChannel.unbind_all();
+        roomChannel.unsubscribe();
+        if (privateChannel) {
+          privateChannel.unbind_all();
+          privateChannel.unsubscribe();
+        }
+      };
+    }
+  }, [pusher, roomCode, playerId]);
+
+  const createRoom = async () => {
+    if (playerName.trim() && maxPlayers) {
+      setError('');
+      try {
+        const response = await fetch('/api/rooms/create', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: playerName.trim(), maxPlayers }),
+        });
+        const data = await response.json();
+        if (response.ok) {
+          setRoomCode(data.roomCode);
+          setPlayerId(data.playerId);
+          // Explicitně nastav view na lobby
+          setView('lobby');
+        } else {
+          setError(data.error || 'Chyba při vytváření místnosti');
+        }
+      } catch (err) {
+        setError('Chyba při vytváření místnosti');
+      }
     }
   };
 
-  const joinRoom = () => {
-    if (socket && playerName.trim() && inputRoomCode.trim()) {
+  const joinRoom = async () => {
+    if (playerName.trim() && inputRoomCode.trim()) {
       setError('');
-      socket.emit('joinRoom', { roomCode: inputRoomCode.trim().toUpperCase(), name: playerName.trim() }, (response: { success?: boolean; error?: string }) => {
-        if (response.error) {
-          setError(response.error);
+      try {
+        const response = await fetch('/api/rooms/join', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ roomCode: inputRoomCode.trim().toUpperCase(), name: playerName.trim() }),
+        });
+        const data = await response.json();
+        if (response.ok) {
+          setRoomCode(inputRoomCode.trim().toUpperCase());
+          setPlayerId(data.playerId);
+          // Explicitně nastav view na lobby
+          setView('lobby');
+        } else {
+          setError(data.error || 'Chyba při připojování');
         }
-      });
+      } catch (err) {
+        setError('Chyba při připojování');
+      }
     }
   };
 
-  const startGame = () => {
-    if (socket && (selectedCategory || customWords)) {
-      const wordsArray = customWords ? customWords.split(',').map(w => w.trim()).filter(w => w) : undefined;
+  const startGame = async () => {
+    if (roomCode && playerId && (selectedCategory || customWords)) {
+      const wordsArray = !selectedCategory && customWords 
+        ? customWords.split(',').map(w => w.trim()).filter(w => w) 
+        : undefined;
       const requiredWords = gameState.maxPlayers || 5;
       
       if (!selectedCategory && (!wordsArray || wordsArray.length < requiredWords)) {
@@ -152,27 +216,71 @@ export default function Home() {
         return;
       }
       
-      socket.emit('startGame', {
-        category: selectedCategory,
-        customWords: wordsArray,
-      });
+      try {
+        const response = await fetch('/api/game/start', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            roomCode,
+            playerId,
+            category: selectedCategory && selectedCategory.trim() !== '' ? selectedCategory : undefined,
+            customWords: wordsArray,
+          }),
+        });
+        const data = await response.json();
+        if (!response.ok) {
+          setError(data.error || 'Chyba při spuštění hry');
+        }
+      } catch (err) {
+        setError('Chyba při spuštění hry');
+      }
     }
   };
 
-  const vote = (votedForId: string) => {
-    if (socket && !votedFor) {
-      socket.emit('vote', { votedForId });
-      setVotedFor(votedForId);
+  const vote = async (votedForId: string) => {
+    if (roomCode && playerId && !votedFor) {
+      try {
+        await fetch('/api/game/vote', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ roomCode, playerId, votedForId }),
+        });
+        setVotedFor(votedForId);
+      } catch (err) {
+        setError('Chyba při hlasování');
+      }
     }
   };
 
-  const nextRound = () => {
-    if (socket) {
-      socket.emit('nextRound');
-      setVotedFor(null);
-      setShowWord(false);
-      setSelectedCategory('');
-      setCustomWords('');
+  const startVoting = async () => {
+    if (roomCode && playerId) {
+      try {
+        await fetch('/api/game/start-voting', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ roomCode, playerId }),
+        });
+      } catch (err) {
+        setError('Chyba při spuštění hlasování');
+      }
+    }
+  };
+
+  const nextRound = async () => {
+    if (roomCode && playerId) {
+      try {
+        await fetch('/api/game/next-round', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ roomCode, playerId }),
+        });
+        setVotedFor(null);
+        setShowWord(false);
+        setSelectedCategory('');
+        setCustomWords('');
+      } catch (err) {
+        setError('Chyba při spuštění nové hry');
+      }
     }
   };
 
@@ -565,7 +673,7 @@ export default function Home() {
               )}
               {isHost && (
                 <button
-                  onClick={() => socket?.emit('startVoting')}
+                  onClick={startVoting}
                   className="mt-6 sm:mt-8 bg-yellow-500 hover:bg-yellow-600 text-black font-semibold py-2.5 sm:py-3 px-6 sm:px-8 text-sm sm:text-base rounded-lg transition-all"
                 >
                   🗳️ Začít hlasování

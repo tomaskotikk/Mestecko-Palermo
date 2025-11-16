@@ -41,12 +41,17 @@ npm run dev
 
 - **Next.js 14** - React framework
 - **Tailwind CSS** - Styling
-- **Socket.io** - Real-time komunikace
+- **Pusher** - Real-time komunikace (kompatibilní s Vercel)
 - **TypeScript** - Type safety
 
 ## 📝 Poznámky
 
 - Hra nevyžaduje databázi - vše běží v paměti serveru
-- Maximálně 5 hráčů na místnost
+- Podporuje 3-8 hráčů na místnost (nastavitelné)
 - Hráči komunikují mezi sebou mimo aplikaci (např. přes Discord, telefon, atd.)
+- Aplikace je plně serverless a kompatibilní s Vercel
+
+## 🚀 Nasazení na Vercel
+
+Pro instrukce k nasazení na Vercel a konfiguraci Pusher, viz [README-PUSHER.md](./README-PUSHER.md)
 
