@@ -351,7 +351,7 @@ export default function Home() {
               🎭
             </div>
             <div className="flex items-center gap-2">
-              <h1 className="text-lg sm:text-xl font-bold">Impostor Game</h1>
+              <h1 className="text-lg sm:text-xl font-bold">Městečko Palermo</h1>
               <span className="text-xs bg-red-500/20 text-red-400 px-1.5 py-0.5 rounded-full font-semibold">BETA</span>
             </div>
           </div>
