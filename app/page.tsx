@@ -3,40 +3,37 @@
 import { useState, useEffect } from 'react';
 import Pusher from 'pusher-js';
 
+type Role =
+  | 'mayor'
+  | 'citizen'
+  | 'mafia'
+  | 'detective'
+  | 'doctor'
+  | 'angel';
+
 interface Player {
   id: string;
   name: string;
-  isImpostor?: boolean;
-  word?: string;
-  votes?: number;
-  speakingOrder?: number;
+  role?: Role;
+  alive: boolean;
+  usedAbility?: boolean;
 }
 
 interface GameState {
   players: Player[];
   gameStarted: boolean;
-  gamePhase: 'lobby' | 'playing' | 'voting' | 'results';
-  category?: string;
-  customWords?: string[];
-  impostorId?: string;
+  gamePhase: 'lobby' | 'night' | 'day' | 'voting' | 'end';
   votes: Record<string, string>;
   roomCode?: string;
   maxPlayers?: number;
+  mafiaIds?: string[];
+  mayorId?: string;
+  lastNightVictimId?: string;
+  lastLynchedId?: string;
+  winner?: 'citizens' | 'mafia';
 }
 
-type View = 'menu' | 'create' | 'join' | 'lobby' | 'playing' | 'voting' | 'results';
-
-const categories = [
-  { id: 'rappers-foreign', name: '🎤 Rappeři Zahraniční', description: 'Eminem, Snoop Dogg, Drake...' },
-  { id: 'streamers-czsk', name: '📺 Streamery CZ/SK', description: 'Coconut, Gejmr, Stazid...' },
-  { id: 'streamers-foreign', name: '📺 Streamery Zahraniční', description: 'xQc, Pokimane, Shroud...' },
-  { id: 'clash-royale', name: '👑 Clash Royale', description: 'Karty, postavy, arény...' },
-  { id: 'movies', name: '🎬 Filmy', description: 'Pulp Fiction, Avatar, Titanic...' },
-  { id: 'tv-shows', name: '📺 Seriály', description: 'Přátelé, Hra o trůny, Breaking Bad...' },
-  { id: 'celebrities', name: '🌟 Celebrity', description: 'Herci, zpěváci, influenceři...' },
-  { id: 'games', name: '🎮 Hry', description: 'Minecraft, GTA, Fortnite...' },
-  { id: 'superheroes', name: '🦸 Superhrdinové', description: 'Superman, Batman, Wonder Woman...' },
-];
+type View = 'menu' | 'create' | 'join' | 'lobby' | 'night' | 'day' | 'voting' | 'end';
 
 export default function Home() {
   const [pusher, setPusher] = useState<Pusher | null>(null);
@@ -51,12 +48,10 @@ export default function Home() {
     gameStarted: false,
     gamePhase: 'lobby',
     votes: {},
-    maxPlayers: 5,
+    maxPlayers: 6,
   });
-  const [selectedCategory, setSelectedCategory] = useState<string>('');
-  const [customWords, setCustomWords] = useState<string>('');
   const [votedFor, setVotedFor] = useState<string | null>(null);
-  const [showWord, setShowWord] = useState(false);
+  const [roleDescription, setRoleDescription] = useState<string>('');
   const [error, setError] = useState<string>('');
   const [copied, setCopied] = useState(false);
   const [maxPlayers, setMaxPlayers] = useState<number>(5);
@@ -115,22 +110,14 @@ export default function Home() {
         if (state.gamePhase === 'lobby') {
           setView('lobby');
           setVotedFor(null);
-          setShowWord(false);
-        } else if (state.gamePhase === 'playing') {
-          setView('playing');
+        } else if (state.gamePhase === 'night') {
+          setView('night');
+        } else if (state.gamePhase === 'day') {
+          setView('day');
         } else if (state.gamePhase === 'voting') {
           setView('voting');
-          // NERESTARTOVAT votedFor při změně na voting!
-          // setVotedFor(null); <-- ODSTRAŇTE TOTO
-        } else if (state.gamePhase === 'results') {
-          setView('results');
-        }
-        
-        const currentPlayer = state.players.find(p => p.id === playerId);
-        if (state.gamePhase === 'playing' && currentPlayer && !currentPlayer.isImpostor && currentPlayer.word) {
-          setShowWord(true);
-        } else if (state.gamePhase === 'lobby') {
-          setShowWord(false);
+        } else if (state.gamePhase === 'end') {
+          setView('end');
         }
       });
 
@@ -139,10 +126,16 @@ export default function Home() {
           console.log('✅ Subscribed to private channel:', playerId);
         });
 
-        privateChannel.bind('wordAssigned', (data: { word: string; isImpostor: boolean; speakingOrder?: number }) => {
-          if (!data.isImpostor && data.word) {
-            setShowWord(true);
-          }
+        privateChannel.bind('roleAssigned', (data: { role: Role }) => {
+          const descriptions: Record<Role, string> = {
+            mayor: 'Jsi Starosta. Moderuješ hru, řídíš noc i den a sám nehlasuješ.',
+            mafia: 'Jsi Vrah (mafia). Vaším cílem je nenápadně zabíjet Občany tak, aby vás městečko neodhalilo.',
+            detective: 'Jsi Detektiv (Katány). Nenápadně pomáhej Občanům odhalit vrahy.',
+            doctor: 'Jsi Doktor. Jednou za hru můžeš po vraždě zachránit oběť (Starosta se s tebou domluví během noci).',
+            angel: 'Jsi Anděl. Jednou za hru můžeš kdykoliv oživit libovolného hráče kromě sebe (domluvíš se se Starostou).',
+            citizen: 'Jsi obyčejný Občan. Diskutuj, ptej se a snaž se odhalit vrahy při hlasování.',
+          };
+          setRoleDescription(descriptions[data.role]);
         });
       }
 
@@ -206,18 +199,8 @@ export default function Home() {
   };
 
   const startGame = async () => {
-    if (roomCode && playerId && (selectedCategory || customWords)) {
-      const wordsArray = !selectedCategory && customWords 
-        ? customWords.split(',').map(w => w.trim()).filter(w => w) 
-        : undefined;
-      const requiredWords = gameState.maxPlayers || 5;
-      
-      if (!selectedCategory && (!wordsArray || wordsArray.length < requiredWords)) {
-        setError(`Musíš zadat alespoň ${requiredWords} vlastních slov!`);
-        setTimeout(() => setError(''), 5000);
-        return;
-      }
-      
+    if (roomCode && playerId) {
+      setError('');
       try {
         const response = await fetch('/api/game/start', {
           method: 'POST',
@@ -225,8 +208,6 @@ export default function Home() {
           body: JSON.stringify({
             roomCode,
             playerId,
-            category: selectedCategory && selectedCategory.trim() !== '' ? selectedCategory : undefined,
-            customWords: wordsArray,
           }),
         });
         const data = await response.json();
@@ -278,6 +259,62 @@ export default function Home() {
     }
   };
 
+  const mafiaAction = async (targetId: string) => {
+    if (roomCode && playerId) {
+      try {
+        await fetch('/api/game/night-mafia', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ roomCode, playerId, targetId }),
+        });
+      } catch (err) {
+        setError('Chyba při volbě oběti pro mafii');
+      }
+    }
+  };
+
+  const doctorAction = async (targetId: string) => {
+    if (roomCode && playerId) {
+      try {
+        await fetch('/api/game/night-doctor', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ roomCode, playerId, targetId }),
+        });
+      } catch (err) {
+        setError('Chyba při použití doktora');
+      }
+    }
+  };
+
+  const angelAction = async (targetId: string) => {
+    if (roomCode && playerId) {
+      try {
+        await fetch('/api/game/night-angel', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ roomCode, playerId, targetId }),
+        });
+      } catch (err) {
+        setError('Chyba při použití anděla');
+      }
+    }
+  };
+
+  const resolveNight = async () => {
+    if (roomCode && playerId) {
+      try {
+        await fetch('/api/game/resolve-night', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ roomCode, playerId }),
+        });
+      } catch (err) {
+        setError('Chyba při ukončování noci');
+      }
+    }
+  };
+
   const nextRound = async () => {
     if (roomCode && playerId) {
       try {
@@ -287,9 +324,7 @@ export default function Home() {
           body: JSON.stringify({ roomCode, playerId }),
         });
         setVotedFor(null);
-        setShowWord(false);
-        setSelectedCategory('');
-        setCustomWords('');
+        setRoleDescription('');
       } catch (err) {
         setError('Chyba při spuštění nové hry');
       }
@@ -303,6 +338,7 @@ export default function Home() {
   };
 
   const currentPlayer = gameState.players.find(p => p.id === playerId);
+  const isMayor = gameState.mayorId === playerId;
   const isHost = gameState.players.length > 0 && gameState.players[0].id === playerId;
 
   return (
@@ -358,10 +394,14 @@ export default function Home() {
           <div className="max-w-2xl mx-auto">
             <div className="text-center mb-8 sm:mb-12">
               <div className="flex items-center justify-center gap-3 mb-4">
-                
+                <span className="px-3 py-1 text-xs rounded-full bg-green-500/10 text-green-300 border border-green-500/30">
+                  Městečko Palermo – sociální dedukční hra
+                </span>
               </div>
-              <h2 className="text-3xl sm:text-4xl font-bold mb-2 sm:mb-3">Impostor Game</h2>
-              <p className="text-sm sm:text-base text-zinc-400">Najdi impostora mezi přáteli! 🕵️‍♂️</p>
+              <h2 className="text-3xl sm:text-4xl font-bold mb-2 sm:mb-3">Městečko Palermo</h2>
+              <p className="text-sm sm:text-base text-zinc-400">
+                Všichni jsou Občané, ale někteří jsou tajní Vrazi. Hra ti vždy řekne, co máš právě dělat.
+              </p>
             </div>
             
             <div className="grid gap-3 sm:gap-4">
@@ -425,7 +465,7 @@ export default function Home() {
                 <div>
                   <label className="block text-xs sm:text-sm font-medium mb-2 sm:mb-3 text-zinc-300">Počet hráčů</label>
                   <div className="grid grid-cols-6 gap-1.5 sm:gap-2">
-                    {[3, 4, 5, 6, 7, 8].map((num) => (
+                    {[6, 7, 8, 9, 10, 11].map((num) => (
                       <button
                         key={num}
                         onClick={() => setMaxPlayers(num)}
@@ -439,6 +479,9 @@ export default function Home() {
                       </button>
                     ))}
                   </div>
+                  <p className="mt-2 text-[10px] sm:text-xs text-zinc-500">
+                    Doporučeno 8–11 hráčů. První hráč v seznamu bude Starosta (moderátor hry).
+                  </p>
                 </div>
 
                 <button
@@ -510,20 +553,19 @@ export default function Home() {
             <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 sm:p-8">
               <div className="flex items-center justify-between mb-6 sm:mb-8">
                 <div>
-                  <h2 className="text-xl sm:text-2xl font-bold mb-0.5 sm:mb-1">Čekárna 🕒</h2>
+                  <h2 className="text-xl sm:text-2xl font-bold mb-0.5 sm:mb-1">Čekárna městečka 🕒</h2>
                   <p className="text-xs sm:text-sm text-zinc-400">
-                    Čeká se na {(gameState.maxPlayers || 5) - gameState.players.length} 
-                    {(gameState.maxPlayers || 5) - gameState.players.length === 1 ? ' hráče' : ' hráče'}
+                    Pro Městečko Palermo je ideální 6+ hráčů. Až budou všichni, host spustí hru jako Starosta.
                   </p>
                 </div>
                 <div className="text-right">
-                  <div className="text-2xl sm:text-3xl font-bold">{gameState.players.length}/{gameState.maxPlayers || 5}</div>
+                  <div className="text-2xl sm:text-3xl font-bold">{gameState.players.length}/{gameState.maxPlayers || 6}</div>
                   <div className="text-xs sm:text-sm text-zinc-400">Hráči</div>
                 </div>
               </div>
 
               <div className="grid gap-2 sm:gap-3 mb-6 sm:mb-8">
-                {Array.from({ length: gameState.maxPlayers || 5 }).map((_, index) => {
+                {Array.from({ length: gameState.maxPlayers || 6 }).map((_, index) => {
                   const player = gameState.players[index];
                   return (
                     <div
@@ -551,7 +593,9 @@ export default function Home() {
                                 <span className="text-[10px] sm:text-xs bg-yellow-500/20 text-yellow-400 px-1.5 sm:px-2 py-0.5 rounded flex-shrink-0">Host 👑</span>
                               )}
                             </div>
-                            <div className="text-[10px] sm:text-xs text-zinc-500">Připraven ✅</div>
+                            <div className="text-[10px] sm:text-xs text-zinc-500">
+                              {index === 0 ? 'Starosta (host) – nebude hlasovat' : 'Připraven ✅'}
+                            </div>
                           </div>
                         </div>
                       ) : (
@@ -571,80 +615,23 @@ export default function Home() {
 
               {isHost && (
                 <div className="space-y-3 sm:space-y-4 pt-4 sm:pt-6 border-t border-zinc-800">
-                  <div>
-                    <label className="block text-xs sm:text-sm font-medium mb-2 text-zinc-300">Výběr kategorie</label>
-                    
-                    {/* Vlastní slova karta */}
-                    <div
-                      onClick={() => setSelectedCategory('')}
-                      className={`p-3 sm:p-4 rounded-lg border cursor-pointer transition-all mb-2 ${
-                        !selectedCategory
-                          ? 'bg-purple-500/10 border-purple-500/30'
-                          : 'bg-zinc-800 border-zinc-700 hover:bg-zinc-700'
-                      }`}
-                    >
-                      <div className="flex items-center gap-3">
-                        <div className={`w-8 h-8 sm:w-10 sm:h-10 rounded-lg flex items-center justify-center font-bold text-sm sm:text-base flex-shrink-0 ${
-                          !selectedCategory
-                            ? 'bg-purple-500 text-white'
-                            : 'bg-zinc-700 text-zinc-400'
-                        }`}>
-                          ✏️
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <div className="font-semibold text-sm sm:text-base">Vlastní slova</div>
-                          <div className="text-[10px] sm:text-xs text-zinc-500">Zadejte vlastní slova oddělená čárkou</div>
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Kategorie v mřížce */}
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-60 overflow-y-auto">
-                      {categories.map((category) => (
-                        <div
-                          key={category.id}
-                          onClick={() => setSelectedCategory(category.id)}
-                          className={`p-3 rounded-lg border cursor-pointer transition-all ${
-                            selectedCategory === category.id
-                              ? 'bg-purple-500/10 border-purple-500/30'
-                              : 'bg-zinc-800 border-zinc-700 hover:bg-zinc-700'
-                          }`}
-                        >
-                          <div className="font-semibold text-xs sm:text-sm mb-1">{category.name}</div>
-                          <div className="text-[10px] text-zinc-500">{category.description}</div>
-                        </div>
-                      ))}
-                    </div>
+                  <div className="bg-zinc-900/60 border border-zinc-800 rounded-lg p-3 sm:p-4 text-xs sm:text-sm text-zinc-300 space-y-1.5">
+                    <p className="font-semibold text-zinc-100">Jak to bude probíhat:</p>
+                    <ul className="list-disc list-inside space-y-0.5">
+                      <li>Host je Starosta – řídí noc a den, sám nehlasuje.</li>
+                      <li>Hra rozdá role (Vrazi, Detektiv, Doktor, Anděl, Občané) tajně každému hráči.</li>
+                      <li>Ve hře vždy uvidíš, v jaké jste fázi a co přesně máš dělat.</li>
+                    </ul>
                   </div>
-
-                  {/* Vlastní slova input - zobrazí se pouze pokud není vybrána kategorie */}
-                  {!selectedCategory && (
-                    <div>
-                      <label className="block text-xs sm:text-sm font-medium mb-2 text-zinc-300">
-                        Vlastní slova (min. {gameState.maxPlayers || 5})
-                      </label>
-                      <input
-                        type="text"
-                        value={customWords}
-                        onChange={(e) => setCustomWords(e.target.value)}
-                        placeholder="Pes, Kočka, Pták, Slon, Medvěd..."
-                        className="w-full px-3 sm:px-4 py-2.5 sm:py-3 text-sm sm:text-base bg-zinc-800 border border-zinc-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500 transition-all"
-                      />
-                      <p className="text-[10px] sm:text-xs text-zinc-500 mt-1.5 sm:mt-2">Oddělte slova čárkou</p>
-                    </div>
-                  )}
 
                   <button
                     onClick={startGame}
-                    disabled={
-                      gameState.players.length !== (gameState.maxPlayers || 5) ||
-                      (!selectedCategory && (!customWords.trim() || customWords.split(',').filter(w => w.trim()).length < (gameState.maxPlayers || 5)))
-                    }
+                    disabled={gameState.players.length !== (gameState.maxPlayers || 6)}
                     className="w-full bg-green-500 hover:bg-green-600 disabled:bg-zinc-800 disabled:text-zinc-500 text-white font-semibold py-2.5 sm:py-3 text-sm sm:text-base rounded-lg transition-all disabled:cursor-not-allowed"
                   >
-                    {gameState.players.length === (gameState.maxPlayers || 5) 
-                      ? '🎮 Spustit hru' 
-                      : `⏳ Čeká se na hráče (${gameState.players.length}/${gameState.maxPlayers || 5})`
+                    {gameState.players.length === (gameState.maxPlayers || 6) 
+                      ? '🎮 Rozdat role a začít noc'
+                      : `⏳ Čeká se na hráče (${gameState.players.length}/${gameState.maxPlayers || 6})`
                     }
                   </button>
                 </div>
@@ -653,67 +640,166 @@ export default function Home() {
           </div>
         )}
 
-        {view === 'playing' && (
-          <div className="max-w-2xl mx-auto text-center">
-            {/* Kategorie - viditelná pro všechny */}
-            {(gameState.category || gameState.customWords) && (
-              <div className="mb-6 bg-zinc-800/50 border border-zinc-700 rounded-xl p-4">
-                <p className="text-xs text-zinc-500 uppercase tracking-wider mb-1">Kategorie</p>
-                <p className="text-lg font-bold text-purple-400">
-                  {gameState.category 
-                    ? categories.find(c => c.id === gameState.category)?.name || '🎯 Kategorie'
-                    : '✏️ Vlastní slova'
-                  }
+        {view === 'night' && (
+          <div className="max-w-3xl mx-auto">
+            <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-6 sm:p-8 space-y-6">
+              <div className="text-center">
+                <h2 className="text-xl sm:text-2xl font-bold mb-2 sm:mb-3">Noc padá na městečko 🌙</h2>
+                <p className="text-sm sm:text-base text-zinc-400">
+                  Každý si potichu přečte svou roli. Tajné akce (vražda, léčení, oživení) zadejte přímo v této obrazovce.
                 </p>
               </div>
-            )}
 
-            <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-6 sm:p-12">
-              {currentPlayer?.isImpostor ? (
-                <div className="space-y-4 sm:space-y-6">
-                  <div className="w-16 h-16 sm:w-20 sm:h-20 mx-auto rounded-full bg-red-500/10 border-2 border-red-500/50 flex items-center justify-center">
-                    <svg className="w-8 h-8 sm:w-10 sm:h-10 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-                    </svg>
+              {currentPlayer && (
+                <div className="grid gap-4 sm:gap-6">
+                  <div className="bg-zinc-800/70 border border-zinc-700 rounded-xl p-4 sm:p-6 text-left space-y-3">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-purple-500 to-pink-600 flex items-center justify-center font-bold text-lg">
+                        {currentPlayer.name.charAt(0).toUpperCase()}
+                      </div>
+                      <div>
+                        <p className="text-xs uppercase tracking-wide text-zinc-500">Tvoje role</p>
+                        <p className="text-lg font-semibold text-white">
+                          {currentPlayer.role === 'mayor' && 'Starosta'}
+                          {currentPlayer.role === 'mafia' && 'Vrah (mafia)'}
+                          {currentPlayer.role === 'detective' && 'Detektiv (Katány)'}
+                          {currentPlayer.role === 'doctor' && 'Doktor'}
+                          {currentPlayer.role === 'angel' && 'Anděl'}
+                          {currentPlayer.role === 'citizen' && 'Občan'}
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="text-sm sm:text-base text-zinc-300 leading-relaxed">
+                      {roleDescription || 'Počkej, až Starosta ukončí noc. Pokud má tvoje role tlačítko níže, použij ho podle pravidel.'}
+                    </div>
                   </div>
-                  <div>
-                    <h3 className="text-2xl sm:text-3xl font-bold text-red-400 mb-2 sm:mb-3">TY JSI IMPOSTOR! 🎭</h3>
-                    <p className="text-sm sm:text-base text-zinc-400">Snaž se zjistit slovo z kategorie výše, aniž bys to prozradil 🕵️‍♂️</p>
-                  </div>
-                  {currentPlayer.speakingOrder && (
-                    <div className="bg-zinc-800 border border-zinc-700 rounded-xl p-4">
-                      <p className="text-sm text-zinc-400 mb-1">Pořadí mluvení</p>
-                      <p className="text-3xl font-bold text-red-400">🎲 Mluvíš jako {currentPlayer.speakingOrder}.</p>
+
+                  {/* Akce pro jednotlivé role */}
+                  {currentPlayer.role === 'mafia' && currentPlayer.alive && (
+                    <div className="bg-red-500/5 border border-red-500/30 rounded-lg p-3 sm:p-4">
+                      <p className="font-semibold text-sm sm:text-base text-red-200 mb-2">
+                        Vyber oběť vraždy (jen živí hráči).
+                      </p>
+                      <div className="space-y-2">
+                        {gameState.players
+                          .filter((p) => p.alive && p.id !== currentPlayer.id)
+                          .map((p) => (
+                            <button
+                              key={p.id}
+                              onClick={() => mafiaAction(p.id)}
+                              className="w-full text-left px-3 py-2 rounded-md bg-zinc-800 hover:bg-zinc-700 text-sm flex items-center justify-between"
+                            >
+                              <span>{p.name}</span>
+                            </button>
+                          ))}
+                      </div>
                     </div>
                   )}
-                </div>
-              ) : showWord && currentPlayer?.word ? (
-                <div className="space-y-4 sm:space-y-6">
-                  <p className="text-zinc-400 text-xs sm:text-sm uppercase tracking-wider">Tvé slovo</p>
-                  <div className="bg-gradient-to-br from-purple-500/10 to-pink-500/10 border border-purple-500/20 rounded-xl p-6 sm:p-12">
-                    <p className="text-2xl sm:text-5xl font-bold break-words hyphens-auto" lang="cs">{currentPlayer.word}</p>
-                  </div>
-                  {currentPlayer.speakingOrder && (
-                    <div className="bg-zinc-800 border border-zinc-700 rounded-xl p-4">
-                      <p className="text-sm text-zinc-400 mb-1">Pořadí mluvení</p>
-                      <p className="text-3xl font-bold text-purple-400">🎲 Mluvíš jako {currentPlayer.speakingOrder}.</p>
+
+                  {currentPlayer.role === 'doctor' && currentPlayer.alive && !currentPlayer.usedAbility && (
+                    <div className="bg-green-500/5 border border-green-500/30 rounded-lg p-3 sm:p-4">
+                      <p className="font-semibold text-sm sm:text-base text-green-200 mb-2">
+                        Doktor: jednou za hru můžeš zachránit jednoho živého hráče (ne sebe).
+                      </p>
+                      <div className="space-y-2">
+                        {gameState.players
+                          .filter((p) => p.alive && p.id !== currentPlayer.id)
+                          .map((p) => (
+                            <button
+                              key={p.id}
+                              onClick={() => doctorAction(p.id)}
+                              className="w-full text-left px-3 py-2 rounded-md bg-zinc-800 hover:bg-zinc-700 text-sm flex items-center justify-between"
+                            >
+                              <span>{p.name}</span>
+                            </button>
+                          ))}
+                      </div>
                     </div>
                   )}
-                  <p className="text-sm sm:text-base text-zinc-400">Diskutuj s ostatními a najdi impostora 🎯</p>
-                </div>
-              ) : (
-                <div className="py-6 sm:py-8">
-                  <div className="w-12 h-12 sm:w-16 sm:h-16 border-4 border-zinc-700 border-t-purple-500 rounded-full animate-spin mx-auto mb-3 sm:mb-4"></div>
-                  <p className="text-sm sm:text-base text-zinc-400">Načítání...</p>
+
+                  {currentPlayer.role === 'angel' && currentPlayer.alive && !currentPlayer.usedAbility && (
+                    <div className="bg-indigo-500/5 border border-indigo-500/30 rounded-lg p-3 sm:p-4">
+                      <p className="font-semibold text-sm sm:text-base text-indigo-200 mb-2">
+                        Anděl: jednou za hru můžeš oživit libovolného hráče kromě sebe (živého nebo mrtvého).
+                      </p>
+                      <div className="space-y-2 max-h-64 overflow-y-auto">
+                        {gameState.players
+                          .filter((p) => p.id !== currentPlayer.id)
+                          .map((p) => (
+                            <button
+                              key={p.id}
+                              onClick={() => angelAction(p.id)}
+                              className="w-full text-left px-3 py-2 rounded-md bg-zinc-800 hover:bg-zinc-700 text-sm flex items-center justify-between"
+                            >
+                              <span>
+                                {p.name}{' '}
+                                {!p.alive && <span className="text-xs text-red-300">(mrtvý)</span>}
+                              </span>
+                            </button>
+                          ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {isMayor && (
+                    <div className="bg-zinc-900/70 border border-zinc-800 rounded-lg p-3 sm:p-4 text-xs sm:text-sm text-zinc-300 space-y-2">
+                      <p className="font-semibold text-zinc-100">Starosta</p>
+                      <p>
+                        Počkej, až všichni s tajnými rolemi provedou své akce. Pak klikni na tlačítko níže a noc se
+                        automaticky vyhodnotí a přejde se na ráno.
+                      </p>
+                      <button
+                        onClick={resolveNight}
+                        className="mt-2 w-full bg-yellow-500 hover:bg-yellow-600 text-black font-semibold py-2.5 sm:py-3 rounded-lg text-sm sm:text-base transition-all"
+                      >
+                        ☀️ Ukončit noc a probudit městečko
+                      </button>
+                    </div>
+                  )}
                 </div>
               )}
-              {isHost && (
-                <button
-                  onClick={startVoting}
-                  className="mt-6 sm:mt-8 bg-yellow-500 hover:bg-yellow-600 text-black font-semibold py-2.5 sm:py-3 px-6 sm:px-8 text-sm sm:text-base rounded-lg transition-all"
-                >
-                  🗳️ Začít hlasování
-                </button>
+            </div>
+          </div>
+        )}
+
+        {view === 'day' && (
+          <div className="max-w-3xl mx-auto">
+            <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 sm:p-8">
+              <div className="text-center mb-6 sm:mb-8">
+                <h2 className="text-xl sm:text-2xl font-bold mb-2 sm:mb-3">Ráno v Palermu 🌤️</h2>
+                <p className="text-sm sm:text-base text-zinc-400">
+                  Starosta oznámí, kdo (případně) byl v noci zabit nebo zachráněn. Potom následuje volná diskuze.
+                </p>
+              </div>
+
+              {gameState.lastNightVictimId && (
+                <div className="mb-6 sm:mb-8 bg-red-500/10 border border-red-500/30 rounded-lg p-3 sm:p-4 text-sm sm:text-base text-red-100 flex items-center gap-3">
+                  <span className="text-xl">💀</span>
+                  <span>
+                    Podle Starosty byla v noci zabita oběť. Pokud ji Doktor nebo Anděl nezachránili, je vyřazena ze hry.
+                  </span>
+                </div>
+              )}
+
+              <div className="bg-zinc-900/60 border border-zinc-800 rounded-lg p-3 sm:p-4 text-xs sm:text-sm text-zinc-300 space-y-1.5 mb-4 sm:mb-6">
+                <p className="font-semibold text-zinc-100">Co teď dělat:</p>
+                <ul className="list-disc list-inside space-y-0.5">
+                  <li>Oběť se jako první krátce vyjádří a tipne vraha.</li>
+                  <li>Potom diskutují všichni živí hráči – obviňujte, braňte se, hledejte nesrovnalosti.</li>
+                  <li>Až Starosta uzná, že diskuze stačila, spustí hlasování.</li>
+                </ul>
+              </div>
+
+              {isMayor && (
+                <div className="text-center">
+                  <button
+                    onClick={startVoting}
+                    className="bg-yellow-500 hover:bg-yellow-600 text-black font-semibold py-2.5 sm:py-3 px-6 sm:px-8 text-sm sm:text-base rounded-lg transition-all"
+                  >
+                    🗳️ Ukončit diskuzi a spustit hlasování
+                  </button>
+                </div>
               )}
             </div>
           </div>
@@ -724,12 +810,14 @@ export default function Home() {
             <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 sm:p-8">
               <div className="text-center mb-6 sm:mb-8">
                 <h2 className="text-xl sm:text-2xl font-bold mb-1 sm:mb-2">Hlasování 🗳️</h2>
-                <p className="text-sm sm:text-base text-zinc-400">Kdo si myslíš, že je impostor? 🕵️‍♂️</p>
+                <p className="text-sm sm:text-base text-zinc-400">
+                  Každý živý hráč (kromě Starosty) nahlas řekne, koho chce popravit. V aplikaci zvol svého podezřelého.
+                </p>
               </div>
               
               <div className="space-y-2 sm:space-y-3">
                 {gameState.players
-                  .filter((p) => p.id !== playerId)
+                  .filter((p) => p.id !== playerId && p.alive && p.role !== 'mayor')
                   .map((player) => {
                     const voteCount = Object.values(gameState.votes).filter((v) => v === player.id).length;
                     return (
@@ -766,7 +854,8 @@ export default function Home() {
               {votedFor && (
                 <div className="mt-4 sm:mt-6 text-center bg-zinc-800 rounded-lg p-3 sm:p-4">
                   <p className="text-zinc-400 text-xs sm:text-sm">
-                    Hlasovalo: {Object.keys(gameState.votes).length}/{gameState.players.length}
+                    Hlasovalo: {Object.keys(gameState.votes).length}/
+                    {gameState.players.filter((p) => p.alive && p.role !== 'mayor').length}
                   </p>
                 </div>
               )}
@@ -774,10 +863,17 @@ export default function Home() {
           </div>
         )}
 
-        {view === 'results' && (
+        {view === 'end' && (
           <div className="max-w-2xl mx-auto">
             <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 sm:p-8">
-              <h2 className="text-xl sm:text-2xl font-bold text-center mb-6 sm:mb-8">Výsledky 🏆</h2>
+              <h2 className="text-xl sm:text-2xl font-bold text-center mb-2 sm:mb-3">Konec hry 🏆</h2>
+              {gameState.winner && (
+                <p className="text-center text-sm sm:text-base mb-6 sm:mb-8 text-zinc-300">
+                  {gameState.winner === 'citizens'
+                    ? 'Vyhrálo městečko! Vrazi byli odhaleni a spravedlnost zvítězila.'
+                    : 'Vrazi ovládli městečko. Občané byli přelstěni.'}
+                </p>
+              )}
               
               <div className="space-y-2 sm:space-y-3 mb-6 sm:mb-8">
                 {gameState.players.map((player) => {
@@ -786,16 +882,20 @@ export default function Home() {
                     <div
                       key={player.id}
                       className={`p-3 sm:p-4 rounded-lg border ${
-                        player.isImpostor
+                        player.role === 'mafia'
                           ? 'bg-red-500/10 border-red-500/30'
+                          : player.role === 'mayor'
+                          ? 'bg-yellow-500/10 border-yellow-500/30'
                           : 'bg-zinc-800 border-zinc-700'
                       }`}
                     >
                       <div className="flex justify-between items-center gap-3">
                         <div className="flex items-center gap-2 sm:gap-3 min-w-0 flex-1">
                           <div className={`w-8 h-8 sm:w-10 sm:h-10 rounded-lg flex items-center justify-center font-bold text-xs sm:text-sm flex-shrink-0 ${
-                            player.isImpostor 
+                            player.role === 'mafia' 
                               ? 'bg-gradient-to-br from-red-500 to-red-700' 
+                              : player.role === 'mayor'
+                              ? 'bg-gradient-to-br from-yellow-400 to-yellow-600'
                               : 'bg-gradient-to-br from-purple-500 to-pink-600'
                           }`}>
                             {player.name.charAt(0).toUpperCase()}
@@ -806,8 +906,30 @@ export default function Home() {
                               {player.id === playerId && (
                                 <span className="text-[10px] sm:text-xs bg-purple-500/20 text-purple-400 px-1.5 sm:px-2 py-0.5 rounded flex-shrink-0">Ty</span>
                               )}
-                              {player.isImpostor && (
-                                <span className="text-[10px] sm:text-xs bg-red-500/20 text-red-400 px-1.5 sm:px-2 py-0.5 rounded font-semibold flex-shrink-0">IMPOSTOR 🎭</span>
+                              {player.role === 'mafia' && (
+                                <span className="text-[10px] sm:text-xs bg-red-500/20 text-red-400 px-1.5 sm:px-2 py-0.5 rounded font-semibold flex-shrink-0">
+                                  Vrah 🔪
+                                </span>
+                              )}
+                              {player.role === 'detective' && (
+                                <span className="text-[10px] sm:text-xs bg-blue-500/20 text-blue-400 px-1.5 sm:px-2 py-0.5 rounded flex-shrink-0">
+                                  Detektiv 🕵️
+                                </span>
+                              )}
+                              {player.role === 'doctor' && (
+                                <span className="text-[10px] sm:text-xs bg-green-500/20 text-green-400 px-1.5 sm:px-2 py-0.5 rounded flex-shrink-0">
+                                  Doktor 💉
+                                </span>
+                              )}
+                              {player.role === 'angel' && (
+                                <span className="text-[10px] sm:text-xs bg-indigo-500/20 text-indigo-400 px-1.5 sm:px-2 py-0.5 rounded flex-shrink-0">
+                                  Anděl 😇
+                                </span>
+                              )}
+                              {player.role === 'mayor' && (
+                                <span className="text-[10px] sm:text-xs bg-yellow-500/20 text-yellow-400 px-1.5 sm:px-2 py-0.5 rounded flex-shrink-0">
+                                  Starosta 👑
+                                </span>
                               )}
                             </div>
                           </div>
@@ -821,12 +943,12 @@ export default function Home() {
                 })}
               </div>
               
-              {isHost && (
+              {isMayor && (
                 <button
                   onClick={nextRound}
                   className="w-full bg-purple-500 hover:bg-purple-600 text-white font-semibold py-2.5 sm:py-3 text-sm sm:text-base rounded-lg transition-all"
                 >
-                  🔄 Nová hra
+                  🔄 Nová hra v Palermu
                 </button>
               )}
             </div>

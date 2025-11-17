@@ -36,6 +36,7 @@ export async function POST(request: NextRequest) {
     room.players.push({
       id: playerId,
       name,
+      alive: true,
     });
 
     // Broadcast game state to room
@@ -43,12 +44,14 @@ export async function POST(request: NextRequest) {
       players: room.players,
       gameStarted: room.gameStarted,
       gamePhase: room.gamePhase,
-      category: room.category,
-      customWords: room.customWords,
-      impostorId: room.impostorId,
       votes: room.votes,
       roomCode: normalizedRoomCode,
       maxPlayers: room.maxPlayers,
+      mafiaIds: room.mafiaIds,
+      mayorId: room.mayorId,
+      lastNightVictimId: room.lastNightVictimId,
+      lastLynchedId: room.lastLynchedId,
+      winner: room.winner,
     });
 
     return NextResponse.json({

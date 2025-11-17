@@ -16,9 +16,9 @@ export async function POST(request: NextRequest) {
     }
 
     const maxPlayersNum = parseInt(maxPlayers, 10);
-    if (isNaN(maxPlayersNum) || maxPlayersNum < 3 || maxPlayersNum > 8) {
+    if (isNaN(maxPlayersNum) || maxPlayersNum < 6 || maxPlayersNum > 15) {
       return NextResponse.json(
-        { error: 'maxPlayers must be a number between 3 and 8' },
+        { error: 'Počet hráčů musí být mezi 6 a 15 pro Městečko Palermo.' },
         { status: 400 }
       );
     }
@@ -37,6 +37,7 @@ export async function POST(request: NextRequest) {
     room.players.push({
       id: playerId,
       name,
+      alive: true,
     });
 
     // Broadcast game state to room
@@ -44,12 +45,14 @@ export async function POST(request: NextRequest) {
       players: room.players,
       gameStarted: room.gameStarted,
       gamePhase: room.gamePhase,
-      category: room.category,
-      customWords: room.customWords,
-      impostorId: room.impostorId,
       votes: room.votes,
       roomCode: roomCode,
       maxPlayers: room.maxPlayers,
+      mafiaIds: room.mafiaIds,
+      mayorId: room.mayorId,
+      lastNightVictimId: room.lastNightVictimId,
+      lastLynchedId: room.lastLynchedId,
+      winner: room.winner,
     });
 
     return NextResponse.json({

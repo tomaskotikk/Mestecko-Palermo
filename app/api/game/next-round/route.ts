@@ -25,23 +25,34 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Check if player is host
-    if (room.players.length === 0 || room.players[0].id !== playerId) {
+    // Check if player je Starosta
+    if (!room.mayorId || room.mayorId !== playerId) {
       return NextResponse.json(
         { error: 'Pouze host může spustit novou hru!' },
         { status: 403 }
       );
     }
 
-    // Reset hry
+    // Reset hry – zpět do lobby
     room.gameStarted = false;
     room.gamePhase = 'lobby';
-    room.impostorId = undefined;
-    room.word = undefined;
     room.votes = {};
+    room.mafiaIds = [];
+    room.detectiveId = undefined;
+    room.doctorId = undefined;
+    room.angelId = undefined;
+    room.mayorId = undefined;
+    room.lastNightVictimId = undefined;
+    room.lastLynchedId = undefined;
+    room.winner = undefined;
+    room.mafiaTargetId = undefined;
+    room.doctorTargetId = undefined;
+    room.angelTargetId = undefined;
+
     room.players.forEach((player) => {
-      player.isImpostor = undefined;
-      player.word = undefined;
+      player.role = undefined;
+      player.alive = true;
+      player.usedAbility = false;
     });
 
     // Broadcast game state to room
@@ -49,12 +60,14 @@ export async function POST(request: NextRequest) {
       players: room.players,
       gameStarted: room.gameStarted,
       gamePhase: room.gamePhase,
-      category: room.category,
-      customWords: room.customWords,
-      impostorId: room.impostorId,
       votes: room.votes,
       roomCode: normalizedRoomCode,
       maxPlayers: room.maxPlayers,
+      mafiaIds: room.mafiaIds,
+      mayorId: room.mayorId,
+      lastNightVictimId: room.lastNightVictimId,
+      lastLynchedId: room.lastLynchedId,
+      winner: room.winner,
     });
 
     return NextResponse.json({ success: true });

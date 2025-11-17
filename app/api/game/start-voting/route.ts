@@ -25,15 +25,15 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Check if player is host
-    if (room.players.length === 0 || room.players[0].id !== playerId) {
+    // Check if player je Starosta
+    if (!room.mayorId || room.mayorId !== playerId) {
       return NextResponse.json(
         { error: 'Pouze host může spustit hlasování!' },
         { status: 403 }
       );
     }
 
-    if (room.gamePhase === 'playing') {
+    if (room.gamePhase === 'day') {
       room.gamePhase = 'voting';
       room.votes = {};
       
@@ -42,12 +42,14 @@ export async function POST(request: NextRequest) {
         players: room.players,
         gameStarted: room.gameStarted,
         gamePhase: room.gamePhase,
-        category: room.category,
-        customWords: room.customWords,
-        impostorId: room.impostorId,
         votes: room.votes,
         roomCode: normalizedRoomCode,
         maxPlayers: room.maxPlayers,
+        mafiaIds: room.mafiaIds,
+        mayorId: room.mayorId,
+        lastNightVictimId: room.lastNightVictimId,
+        lastLynchedId: room.lastLynchedId,
+        winner: room.winner,
       });
     }
 

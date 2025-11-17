@@ -1,12 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getRoom, getRandomWord, generateSpeakingOrder } from '@/lib/game-state';
+import { getRoom, type Player } from '@/lib/game-state';
 import { pusherServer } from '@/lib/pusher';
 
 export const dynamic = 'force-dynamic';
 
 export async function POST(request: NextRequest) {
   try {
-    const { roomCode, category, customWords, playerId } = await request.json();
+    const { roomCode, playerId } = await request.json();
     
     if (!roomCode || !playerId) {
       return NextResponse.json(
@@ -47,51 +47,86 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Validace vlastních slov
-    if (!category && (!customWords || customWords.length < room.maxPlayers)) {
-      return NextResponse.json(
-        { error: `Musíš zadat alespoň ${room.maxPlayers} vlastních slov!` },
-        { status: 400 }
-      );
-    }
+    // Nastav Starostu náhodně
+    const mayorIndex = Math.floor(Math.random() * room.players.length);
+    const mayor = room.players[mayorIndex];
+    room.mayorId = mayor.id;
 
-    // Vyber náhodného impostora
-    const impostorIndex = Math.floor(Math.random() * room.maxPlayers);
-    const impostor = room.players[impostorIndex];
-    room.impostorId = impostor.id;
-
-    // Vygeneruj slovo
-    const word = getRandomWord(category, customWords);
-    room.word = word;
-    room.category = category;
-    room.customWords = customWords;
-
-    // Vygeneruj náhodné pořadí mluvení
-    const speakingOrder = generateSpeakingOrder(room.maxPlayers);
-
-    // Přiřaď slova a pořadí hráčům
-    room.players.forEach((player, index) => {
-      player.speakingOrder = speakingOrder[index];
-      
-      if (player.id === impostor.id) {
-        player.isImpostor = true;
-        player.word = undefined;
-      } else {
-        player.isImpostor = false;
-        player.word = word;
-      }
+    // Všichni hráči jsou na začátku naživu
+    room.players.forEach((player) => {
+      player.alive = true;
+      player.usedAbility = false;
+      player.role = undefined;
     });
 
-    room.gameStarted = true;
-    room.gamePhase = 'playing';
-    room.votes = {};
+    // Pomocná funkce pro shuffle (bez Starosty)
+    const shuffledPlayers: Player[] = room.players.filter((p) => p.id !== mayor.id);
+    for (let i = shuffledPlayers.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [shuffledPlayers[i], shuffledPlayers[j]] = [shuffledPlayers[j], shuffledPlayers[i]];
+    }
 
-    // Pošli každému hráči jeho informace
+    // Jednodušší nastavení rolí:
+    // - 1–2 Vrazi podle počtu hráčů
+    // - 1 Detektiv, 1 Doktor, 1 Anděl (pokud je dost hráčů)
+    const nonMayorCount = shuffledPlayers.length;
+    const mafiaCount = nonMayorCount >= 7 ? 2 : 1;
+
+    room.mafiaIds = [];
+    room.detectiveId = undefined;
+    room.doctorId = undefined;
+    room.angelId = undefined;
+
+    let index = 0;
+
+    // Vrazi
+    for (let m = 0; m < mafiaCount && index < shuffledPlayers.length; m++, index++) {
+      const p = shuffledPlayers[index];
+      p.role = 'mafia';
+      room.mafiaIds.push(p.id);
+    }
+
+    // Detektiv
+    if (index < shuffledPlayers.length) {
+      const p = shuffledPlayers[index++];
+      p.role = 'detective';
+      room.detectiveId = p.id;
+    }
+
+    // Doktor
+    if (index < shuffledPlayers.length) {
+      const p = shuffledPlayers[index++];
+      p.role = 'doctor';
+      room.doctorId = p.id;
+    }
+
+    // Anděl – pouze pokud zbývá někdo další
+    if (index < shuffledPlayers.length) {
+      const p = shuffledPlayers[index++];
+      p.role = 'angel';
+      room.angelId = p.id;
+    }
+
+    // Zbytek jsou Občané
+    for (; index < shuffledPlayers.length; index++) {
+      const p = shuffledPlayers[index];
+      p.role = 'citizen';
+    }
+
+    // Starosta (host) – speciální role mimo hru, nehlasuje, neúčastní se noci
+    mayor.role = 'mayor';
+
+    room.gameStarted = true;
+    room.gamePhase = 'night';
+    room.votes = {};
+    room.lastNightVictimId = undefined;
+    room.lastLynchedId = undefined;
+    room.winner = undefined;
+
+    // Pošli každému hráči jeho roli (soukromě)
     for (const player of room.players) {
-      await pusherServer.trigger(`private-player-${player.id}`, 'wordAssigned', {
-        word: player.word,
-        isImpostor: player.isImpostor,
-        speakingOrder: player.speakingOrder,
+      await pusherServer.trigger(`private-player-${player.id}`, 'roleAssigned', {
+        role: player.role,
       });
     }
 
@@ -100,12 +135,14 @@ export async function POST(request: NextRequest) {
       players: room.players,
       gameStarted: room.gameStarted,
       gamePhase: room.gamePhase,
-      category: room.category,
-      customWords: room.customWords,
-      impostorId: room.impostorId,
       votes: room.votes,
       roomCode: normalizedRoomCode,
       maxPlayers: room.maxPlayers,
+      mafiaIds: room.mafiaIds,
+      mayorId: room.mayorId,
+      lastNightVictimId: room.lastNightVictimId,
+      lastLynchedId: room.lastLynchedId,
+      winner: room.winner,
     });
 
     return NextResponse.json({ success: true });
