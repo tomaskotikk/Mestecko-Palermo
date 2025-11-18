@@ -63,6 +63,7 @@ export default function Home() {
   const [copied, setCopied] = useState(false);
   const [maxPlayers, setMaxPlayers] = useState<number>(5);
   const [mayorMessages, setMayorMessages] = useState<string[]>([]);
+  const [killedMessage, setKilledMessage] = useState<string | null>(null);
 
   // Initialize Pusher
   useEffect(() => {
@@ -149,6 +150,11 @@ export default function Home() {
         // Notifikace o nočních akcích (dostane pouze cílový privátní kanál hráče)
         privateChannel.bind('actionOccurred', (data: { message: string }) => {
           setMayorMessages((prev) => [...prev, data.message]);
+        });
+
+        // Notifikace pro oběť: zobrazení plnoobrazovkové hlášky a zablokování akcí
+        privateChannel.bind('youWereKilled', (data: { message: string }) => {
+          setKilledMessage(data.message);
         });
       }
 
@@ -392,6 +398,17 @@ export default function Home() {
           )}
         </div>
       </div>
+
+        {/* Pokud byl hráč zavražděn, ukaž plnoobrazovkovou hlášku a zablokuj UI */}
+        {killedMessage && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/90 text-center p-6">
+            <div className="max-w-xl w-full bg-zinc-900 border border-red-600 rounded-lg p-8">
+              <h2 className="text-2xl font-bold text-red-400 mb-3">Byl jsi zavražděn</h2>
+              <p className="text-zinc-300 mb-4">{killedMessage}</p>
+              <p className="text-zinc-500 text-sm">Jsi nyní vyřazen ze hry a nemůžeš nic dělat. Sleduj průběh.</p>
+            </div>
+          </div>
+        )}
 
         {isMayor && mayorMessages && mayorMessages.length > 0 && (
           <div className="max-w-6xl mx-auto px-4 sm:px-6 py-2">

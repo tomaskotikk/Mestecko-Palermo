@@ -107,6 +107,24 @@ export async function POST(request: NextRequest) {
       winner: room.winner,
     });
 
+    // Informuj oběť soukromě, že byla zavražděna (pokud nějaká je)
+    if (nightVictimId) {
+      try {
+        const victim = room.players.find((p) => p.id === nightVictimId);
+        if (victim) {
+          // Najdi kdo ho zabil (pokud máme akci v nightActions)
+          const mafiaAction = room.nightActions?.find((a) => a.type === 'mafia' && a.targetId === nightVictimId);
+          const killerName = mafiaAction ? mafiaAction.actorName : 'neznámý';
+
+          await pusherServer.trigger(`private-player-${victim.id}`, 'youWereKilled', {
+            message: `Byl jsi zavražděn. Zabil tě ${killerName}.`,
+          });
+        }
+      } catch (err) {
+        console.error('Failed to notify victim about being killed', err);
+      }
+    }
+
     return NextResponse.json({ success: true });
   } catch (error) {
     console.error('Error resolving night:', error);
