@@ -34,6 +34,14 @@ export interface GameRoom {
   mafiaTargetId?: string;
   doctorTargetId?: string;
   angelTargetId?: string;
+  // noční akce pro Starostu (historie během noci)
+  nightActions?: Array<{
+    type: 'mafia' | 'doctor' | 'angel' | 'sheriff';
+    actorId: string;
+    actorName: string;
+    targetId: string;
+    targetName: string;
+  }>;
 }
   
   const rooms = new Map<string, GameRoom>();
@@ -60,6 +68,7 @@ export interface GameRoom {
       votes: {},
       maxPlayers: maxPlayers,
       mafiaIds: [],
+      nightActions: [],
     });
     return code;
   }

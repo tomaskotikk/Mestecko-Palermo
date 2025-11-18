@@ -39,6 +39,14 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // Starosta musí počkat, dokud vrah nevybere oběť
+    if (!room.mafiaTargetId) {
+      return NextResponse.json(
+        { error: 'Vrah ještě nevybral oběť. Počkej prosím.' },
+        { status: 400 }
+      );
+    }
+
     let nightVictimId: string | undefined = undefined;
 
     // 1) Aplikuj andělovo oživení (může proběhnout kdykoliv)

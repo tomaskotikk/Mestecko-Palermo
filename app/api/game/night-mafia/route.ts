@@ -44,6 +44,16 @@ export async function POST(request: NextRequest) {
 
     room.mafiaTargetId = targetId;
 
+    // Přidej akci do nightActions pro Starostu
+    room.nightActions = room.nightActions || [];
+    room.nightActions.push({
+      type: 'mafia',
+      actorId: player.id,
+      actorName: player.name,
+      targetId: target.id,
+      targetName: target.name,
+    });
+
     await pusherServer.trigger(`room-${normalizedRoomCode}`, 'gameState', {
       players: room.players,
       gameStarted: room.gameStarted,
@@ -56,7 +66,22 @@ export async function POST(request: NextRequest) {
       lastNightVictimId: room.lastNightVictimId,
       lastLynchedId: room.lastLynchedId,
       winner: room.winner,
+      nightActions: room.nightActions,
     });
+
+    // Pošli soukromou notifikaci Starostovi (pokud existuje)
+    if (room.mayorId) {
+      try {
+        await pusherServer.trigger(`private-player-${room.mayorId}`, 'actionOccurred', {
+          message: `${player.name}: 🔪 zabil ${target.name}`,
+          type: 'mafia',
+          actorId: player.id,
+          targetId: target.id,
+        });
+      } catch (err) {
+        console.error('Failed to notify mayor about mafia action', err);
+      }
+    }
 
     return NextResponse.json({ success: true });
   } catch (error) {
@@ -67,5 +92,3 @@ export async function POST(request: NextRequest) {
     );
   }
 }
-
-
